@@ -1,6 +1,7 @@
 #include "radix_sort.cuh"
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
+#include "defines.h"
 
 #include <cstdlib>
 #include <cstdio>
@@ -9,10 +10,8 @@
 #include <thrust/device_vector.h>
 #include <thrust/functional.h>
 
-#define INTSIZE 32
-
 // check whether a sequence has n-th bit set for all n and put the results into an array
-__global__ void generateFlagsKernel(unsigned int* input, int* flags, const int sequenceLength, const int numberOfSequences, const int i, const int j)
+__global__ void generateFlagsKernel(const unsigned int* input, int* flags, const int sequenceLength, const int numberOfSequences, const int i, const int j)
 {
 	int id = blockIdx.x * blockDim.x + threadIdx.x;
     if (id >= numberOfSequences) return;
@@ -31,7 +30,7 @@ __global__ void splitKernel(const int* flags, int* indices, const int sequenceLe
 }
 
 // permute using the indices array
-__global__ void permuteKernel(unsigned int* input, unsigned int* output, int* indices, const int sequenceLength, const int numberOfSequences)
+__global__ void permuteKernel(const unsigned int* input, unsigned int* output, const int* indices, const int sequenceLength, const int numberOfSequences)
 {
     int id = blockIdx.x * blockDim.x + threadIdx.x;
     if (id >= numberOfSequences) return;
@@ -79,12 +78,13 @@ cudaError_t radixSort(unsigned int** dev_input, const int sequenceLength, const 
         thrust::device_vector<int> dev_flags(numberOfSequences);
         int* dev_flags_ptr = thrust::raw_pointer_cast(dev_flags.data());
 
-        for (int i = 0; i < sequenceLength; i++)
+        for (int i = sequenceLength - 1; i >= 0; i--)
         {
             for (int j = 0; j < INTSIZE; j++)
             {
                 // generate flags
-                generateFlagsKernel << <(numberOfSequences + threadsPerBlock - 1) / threadsPerBlock, threadsPerBlock >> > (*dev_input, dev_flags_ptr, sequenceLength, numberOfSequences, i, j);
+                generateFlagsKernel << <(numberOfSequences + threadsPerBlock - 1) / threadsPerBlock, threadsPerBlock >> > 
+                    (*dev_input, dev_flags_ptr, sequenceLength, numberOfSequences, i, j);
 
                 // calculate I_down
                 auto begin = thrust::make_transform_iterator(dev_flags.begin(), negation());
@@ -99,16 +99,13 @@ cudaError_t radixSort(unsigned int** dev_input, const int sequenceLength, const 
                 int* I_up = thrust::raw_pointer_cast(dev_scanned.data());
 
                 // split
-                splitKernel << <(numberOfSequences + threadsPerBlock - 1) / threadsPerBlock, threadsPerBlock >> > (dev_flags_ptr, dev_indices, sequenceLength, numberOfSequences, I_down, I_up);
-
-                cudaStatus = cudaDeviceSynchronize();
-                if (cudaStatus != cudaSuccess) {
-                    fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching splitKernel!\n", cudaStatus);
-                    goto Error;
-                }
+                splitKernel << <(numberOfSequences + threadsPerBlock - 1) / threadsPerBlock, threadsPerBlock >> > 
+                    (dev_flags_ptr, dev_indices, sequenceLength, numberOfSequences, I_down, I_up);
 
                 // permute input
-                permuteKernel << <(numberOfSequences + threadsPerBlock - 1) / threadsPerBlock, threadsPerBlock >> > (*dev_input, dev_output, dev_indices, sequenceLength, numberOfSequences);
+                permuteKernel << <(numberOfSequences + threadsPerBlock - 1) / threadsPerBlock, threadsPerBlock >> > 
+                    (*dev_input, dev_output, dev_indices, sequenceLength, numberOfSequences);
+
                 unsigned int* temp;
 
                 temp = *dev_input;
@@ -119,5 +116,6 @@ cudaError_t radixSort(unsigned int** dev_input, const int sequenceLength, const 
     }
 Error:
     cudaFree(dev_output);
+    cudaFree(dev_indices);
     return cudaStatus;
 }
