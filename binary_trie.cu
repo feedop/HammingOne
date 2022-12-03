@@ -11,7 +11,7 @@
 #include <iostream>
 
 cudaError_t allocateResources(int** dev_children, int** dev_preScanned, int** dev_minRange, int** dev_maxRange, int** dev_newMinRange, int** dev_newMaxRange, 
-	int** dev_counter, int** dev_prevCounter, int** dev_childrenCount, int** dev_prevChildrenCount, const int numberOfSequences)
+	int** dev_counter, int** dev_prevCounter, int** dev_childrenCount, int** dev_prevChildrenCount, int** dev_tempChildrenCount, const int numberOfSequences)
 {
 	cudaError_t cudaStatus;
 	cudaStatus = cudaMalloc((void**)dev_preScanned, sizeof(int) * 2 * numberOfSequences);
@@ -54,6 +54,11 @@ cudaError_t allocateResources(int** dev_children, int** dev_preScanned, int** de
 	if (cudaStatus != cudaSuccess) {
 		fprintf(stderr, "dev_childrenCount cudaMalloc failed!");
 	}
+	cudaStatus = cudaMalloc((void**)dev_tempChildrenCount, sizeof(int));
+	if (cudaStatus != cudaSuccess)
+	{
+		fprintf(stderr, "dev_childrenCount cudaMalloc failed!");
+	}
 	return cudaStatus;
 }
 
@@ -66,12 +71,12 @@ __global__ void markChildrenKernel(const unsigned int* input, int* children, con
 	//printf("minRange (thread %d): %d\n", id, minRange[id]);
 	//printf("maxRange (thread %d): %d\n", id, maxRange[id]);
 	// we have a left child
+	//if (j == 0) printf("minRange: %d, maxrange: %d, childrencount: %d\n", minRange[0], maxRange[0], *childrenCount);
 	if (!((input[i * numberOfSequences + minRange[id]]) & (1 << j)))
 	{
 		//printf("left child (thread %d), %d\n", id, i * numberOfSequences + minRange[id]);
 		children[2 * id] = 1;
-	}
-		
+	}		
 	else
 	{
 		//printf("no left child (thread %d), %d\n", id, i * numberOfSequences + minRange[id]);
@@ -84,8 +89,7 @@ __global__ void markChildrenKernel(const unsigned int* input, int* children, con
 	{
 		//printf("right child (thread %d), %d\n", id, i * numberOfSequences + maxRange[id]);
 		children[2 * id + 1] = 1;
-	}
-		
+	}	
 	else
 	{
 		//printf("no right child (thread %d): %d\n", id, i * numberOfSequences + maxRange[id]);
@@ -97,12 +101,13 @@ __global__ void markChildrenKernel(const unsigned int* input, int* children, con
 	//printf("Children: %d, %d\n", children[2 * id], children[2 * id + 1]);
 }
 
-__global__ void childrenUpdateKernel(int* childrenCount, int* prevChildrenCount, const int* children, const int* preScanned)
+__global__ void childrenUpdateKernel(int* childrenCount, int* tempChildrenCount, const int* children, const int* preScanned)
 {
 	//printf("entering children update, childrenCount: %d, prescanned: %d\n", *childrenCount, preScanned[2 * (*childrenCount) - 1]);
-	//printf("children: %d, %d, %d, %d", children[0], children[1], children[2], children[3]);
-	*prevChildrenCount = *childrenCount;
+	//printf("children: %d, %d, ", children[0], children[1]);
+	*tempChildrenCount = *childrenCount;
 	*childrenCount = preScanned[2 * (*childrenCount) - 1] + children[2 * (*childrenCount) - 1];
+	//printf("childrenCount = %d\n", *childrenCount);
 	//printf("exiting children update, children:%d\n", *childrenCount);
 }
 
@@ -111,18 +116,20 @@ __global__ void fillIndicesKernel(const int* children, const int* preScanned, in
 	int id = blockIdx.x * blockDim.x + threadIdx.x;
 	if (id >= *childrenCount) return;
 	//printf("entering fillIndices (thread: %d)\n", id);
-
+	//if (id <= DEBUG_MAXID && *prevCounter < 50) printf("prevCounter = %d, childrenCount = %d\n", *prevCounter, *childrenCount);
+	//if (id == 1) printf("1!!!!!\n");
 	// we have a left child
 	if (children[2 * id] == 1)
 		L[*prevCounter + id] = *counter + preScanned[2 * id];
 	else
 		L[*prevCounter + id] = NOCHILD;
-
+	//printf("L[%d] = %d,id: %d\n", *prevCounter + id, L[*prevCounter + id], id);
 	// we have a right child
 	if (children[2 * id + 1] == 1)
 		R[*prevCounter + id] = *counter + preScanned[2 * id + 1];
 	else
 		R[*prevCounter + id] = NOCHILD;
+	//printf("R[%d] = %d, id: %d\n", *prevCounter + id, R[*prevCounter + id], id);
 	//printf("exiting fillIndices (thread: %d)\n", id);
 }
 
@@ -133,10 +140,28 @@ __global__ void calculateRangesKernel(const unsigned int* input, const int* chil
 	int id = blockIdx.x * blockDim.x + threadIdx.x;
 	if (id >= *prevChildrenCount) return;
 	//printf("entering calculateRanges kernel (thread: %d)\n", id);
+	//if (j == 0) printf("ranges before: %d, %d\n", minRange[id], maxRange[id]);
+	// if we have only one child
+	 if (children[2 * id] + children[2 * id + 1] == 1)
+	 {
+		 // if we have a left child
+		 if (children[2 * id] == 1)
+		 {
+			 newMinRange[preScanned[2 * id]] = minRange[id];
+			 newMaxRange[preScanned[2 * id]] = maxRange[id];
+		 }
+		 if (children[2 * id + 1] == 1)
+		 {
+			 newMinRange[preScanned[2 * id + 1]] = minRange[id];
+			 newMaxRange[preScanned[2 * id + 1]] = maxRange[id];
+		 }
+		 return;
+	 }
+	 //if (j == 0) printf("both children\n");
 	// if we have a left child
-	if (children[2 * id] == 1)
-	{
-		//printf("we have a left child (thread: %d), minrange: %d\n", id, minRange[id]);
+	//if (children[2 * id] == 1)
+	//{
+		//if (j == 1)printf("we have a left child (thread: %d), minrange: %d\n", id, minRange[id]);
 		newMinRange[preScanned[2 * id]] = minRange[id];
 		//printf("filled minrange (thread: %d)\n", id);
 		// find max range - first 1 from the right
@@ -150,11 +175,11 @@ __global__ void calculateRangesKernel(const unsigned int* input, const int* chil
 			}
 		}
 		newMaxRange[preScanned[2 * id]] = max < 0 ? 0 : max;
-	}
+	//}
 	// if we have a right child
-	if (children[2 * id + 1] == 1)
-	{
-		//printf("we have a right child (thread: %d)\n", id);
+	//if (children[2 * id + 1] == 1)
+	//{
+		//if (j <= 1) printf("we have a right child (thread: %d)\n", id);
 		newMaxRange[preScanned[2 * id + 1]] = maxRange[id];
 		// find min range - last 0 from the left
 		int min = maxRange[id];
@@ -163,31 +188,33 @@ __global__ void calculateRangesKernel(const unsigned int* input, const int* chil
 			if (!((input[i * numberOfSequences + sequence]) & (1 << j)))
 			{
 				min = sequence + 1;
+				//if (j == 0) printf("min: %d\n", min);
 				break;
 			}
 		}
 		newMinRange[preScanned[2 * id + 1]] = min >= numberOfSequences ? numberOfSequences - 1 : min;
-	}
+	//}
 	//printf("exiting calculateRanges kernel (thread: %d)\n", id);
 }
 
 __global__ void buildFirstLevelKernel(const unsigned int* input, int* L, int* R, const int numberOfSequences,
-	int* counter, int* prevCounter, int* childrenCount, int* minRange, int* maxRange)
+	int* counter, int* prevCounter, int* childrenCount, int* prevChildrenCount, int* minRange, int* maxRange)
 {
 	*counter = 1;
+	*prevChildrenCount = 1;
+	*prevCounter = 1;
 	// mark children
 	
 	if (!(input[0] & (1 << (INTSIZE - 1))))
-		L[0] = ++(*counter);
+		L[0] = (*counter)++;
 	else
 		L[0] = NOCHILD;
 	if (input[numberOfSequences - 1] & (1 << (INTSIZE - 1)))
-		R[0] = ++(*counter);
+		R[0] = (*counter)++;
 	else
 		R[0] = NOCHILD;
-	//printf("marked\n");
-	// fill ranges
 
+	// fill ranges
 	minRange[0] = 0;
 	// both children
 	if (*counter == 3)
@@ -220,24 +247,38 @@ __global__ void buildFirstLevelKernel(const unsigned int* input, int* L, int* R,
 // increments node counter
 __global__ void incrementCounterKernel(int* counter, int* prevCounter, const int* childrenCount)
 {
-	//printf("entering increment counter\n");
 	*prevCounter = *counter;
 	*counter += *childrenCount;
-	//printf("exiting increment counter\n");
 }
 
-// fills last level
-//__global__ void buildLastLevelKernel(const int* counter, const int* prevCounter, int* L, int* R)
-//{
-//	for (int leaf = *prevCounter; leaf < *counter; leaf++)
-//	{
-//		L[leaf] = FOUND;
-//		R[leaf] = FOUND;
-//	}
-//}
+__global__ void fillLastLevelKernel(const int* children, const int* preScanned, int* L, int* R, int* minRange, int* maxRange, const int* counter, const int* prevCounter,
+	const int* childrenCount, int* outLMinRange, int* outRMinRange, const bool printPairs)
+{
+	int id = blockIdx.x * blockDim.x + threadIdx.x;
+	if (id >= *childrenCount) return;
 
-// special case of buulding a binary trie for one-int sequences
-void buildTrie(const unsigned int* input, int* L, int* R, const int numberOfSequences, const int sequenceLength)
+	// we have a left child
+	if (children[2 * id] == 1)
+	{
+		L[*prevCounter + id] = maxRange[preScanned[2 * id]] - minRange[preScanned[2 * id]] + 1;
+		if (printPairs)
+			outLMinRange[*prevCounter + id] = minRange[preScanned[2 * id]];
+	}	
+	else
+		L[*prevCounter + id] = NOCHILD;
+	// we have a right child
+	if (children[2 * id + 1] == 1)
+	{
+		R[*prevCounter + id] = maxRange[preScanned[2 * id + 1]] - minRange[preScanned[2 * id + 1]] + 1;
+		if (printPairs)
+			outRMinRange[*prevCounter + id] = minRange[preScanned[2 * id + 1]];
+	}	
+	else
+		R[*prevCounter + id] = NOCHILD;
+}
+
+// build the tree
+void buildTrie(const unsigned int* input, int* L, int* R, int* outLMinRange, int* outRMinRange, const int numberOfSequences, const int sequenceLength, bool printPairs)
 {
 	cudaError_t cudaStatus;
 	int* dev_children = 0;
@@ -250,9 +291,10 @@ void buildTrie(const unsigned int* input, int* L, int* R, const int numberOfSequ
 	int* dev_prevCounter = 0;
 	int* dev_childrenCount = 0;
 	int* dev_prevChildrenCount = 0;
+	int* dev_tempChildrenCount = 0;
 
 	cudaStatus = allocateResources(&dev_children, &dev_preScanned, &dev_minRange, &dev_maxRange, &dev_newMinRange, &dev_newMaxRange, &dev_counter, &dev_prevCounter,
-		&dev_childrenCount, &dev_prevChildrenCount, numberOfSequences);
+		&dev_childrenCount, &dev_prevChildrenCount, &dev_tempChildrenCount, numberOfSequences);
 	if (cudaStatus != cudaSuccess) {
 		fprintf(stderr, "allocateResources failed!");
 		goto Error;
@@ -264,7 +306,7 @@ void buildTrie(const unsigned int* input, int* L, int* R, const int numberOfSequ
 	// first level
 	
 	cudaMemset(dev_children, 0, 2 * numberOfSequences);
-	buildFirstLevelKernel<<<1,1>>>(input, L, R, numberOfSequences, dev_counter, dev_prevCounter, dev_childrenCount, dev_minRange, dev_maxRange);
+	buildFirstLevelKernel<<<1,1>>>(input, L, R, numberOfSequences, dev_counter, dev_prevCounter, dev_childrenCount, dev_prevChildrenCount, dev_minRange, dev_maxRange);
 	int threadsPerBlock = numberOfSequences < 1024 ? numberOfSequences : 1024;
 
 	// middle
@@ -272,28 +314,30 @@ void buildTrie(const unsigned int* input, int* L, int* R, const int numberOfSequ
 	{
 		int from = i == 0 ? INTSIZE - 2 : INTSIZE - 1;
 		int to = i == sequenceLength - 1 ? 1 : 0;
-		for (int j = from; j > to; j--)
+		for (int j = from; j >= to; j--)
 		{
+			
 			// mark children
 			markChildrenKernel << <(numberOfSequences + threadsPerBlock - 1) / threadsPerBlock, threadsPerBlock >> > (input, dev_children,
 				dev_minRange, dev_maxRange, numberOfSequences, dev_counter, i, j, dev_childrenCount);
-			cudaDeviceSynchronize();
-			
 			//preScan
-			thrust::exclusive_scan(dev_children_ptr, dev_children_ptr + 2 * (numberOfSequences), dev_preScanned_ptr);
-			cudaDeviceSynchronize();
+			thrust::exclusive_scan(dev_children_ptr, dev_children_ptr + 2 * (numberOfSequences), dev_preScanned_ptr);;
 			// number of children
 			childrenUpdateKernel << <1, 1 >> > (dev_childrenCount, dev_prevChildrenCount, dev_children, dev_preScanned);
-			cudaDeviceSynchronize();
 			// fill indices		
 			fillIndicesKernel << < (numberOfSequences + threadsPerBlock - 1) / threadsPerBlock, threadsPerBlock >> > (dev_children, dev_preScanned, L, R, dev_counter, dev_prevCounter, dev_prevChildrenCount);
-			cudaDeviceSynchronize();
 			// calculate ranges
 			calculateRangesKernel << < (numberOfSequences + threadsPerBlock - 1) / threadsPerBlock, threadsPerBlock >> > (input, dev_children, dev_preScanned, dev_minRange, dev_maxRange,
 				dev_newMinRange, dev_newMaxRange, numberOfSequences, 1, dev_counter, i, j, dev_prevChildrenCount);
 			cudaDeviceSynchronize();
+			
+			// increment prevChildren count by value calculatet in childrenUpdateKernel
+			int* temp = dev_tempChildrenCount;
+			dev_tempChildrenCount = dev_prevChildrenCount;
+			dev_prevChildrenCount = temp;
+
 			// swap ranges
-			int* temp = dev_minRange;
+			temp = dev_minRange;
 			dev_minRange = dev_newMinRange;
 			dev_newMinRange = temp;
 
@@ -301,20 +345,31 @@ void buildTrie(const unsigned int* input, int* L, int* R, const int numberOfSequ
 			dev_maxRange = dev_newMaxRange;
 			dev_newMaxRange = temp;
 
+			// increment counter
 			incrementCounterKernel << <1, 1 >> > (dev_counter, dev_prevCounter, dev_childrenCount);
-			cudaDeviceSynchronize();
-		}
-		cudaStatus = cudaDeviceSynchronize();
-		if (cudaStatus != cudaSuccess) {
-			fprintf(stderr, "cudaSynchronize failed!");
-			goto Error;
 		}
 	}
-	
 
 	// last level
-	/*int threadsPerBlock = numberOfSequences < 1024 ? numberOfSequences : 1024;
-	buildLastLevelKernel << <(numberOfSequences + threadsPerBlock - 1) / threadsPerBlock, threadsPerBlock >> > ();*/
+
+	markChildrenKernel << <(numberOfSequences + threadsPerBlock - 1) / threadsPerBlock, threadsPerBlock >> > (input, dev_children,
+		dev_minRange, dev_maxRange, numberOfSequences, dev_counter, sequenceLength - 1, 0, dev_childrenCount);
+	//preScan
+	thrust::exclusive_scan(dev_children_ptr, dev_children_ptr + 2 * (numberOfSequences), dev_preScanned_ptr);;
+	// number of children
+	childrenUpdateKernel << <1, 1 >> > (dev_childrenCount, dev_prevChildrenCount, dev_children, dev_preScanned);
+	calculateRangesKernel << < (numberOfSequences + threadsPerBlock - 1) / threadsPerBlock, threadsPerBlock >> > (input, dev_children, dev_preScanned, dev_minRange, dev_maxRange,
+		dev_newMinRange, dev_newMaxRange, numberOfSequences, 1, dev_counter, sequenceLength - 1, 0, dev_prevChildrenCount);
+	// fill indices		
+	fillLastLevelKernel << < (numberOfSequences + threadsPerBlock - 1) / threadsPerBlock, threadsPerBlock >> > (dev_children, dev_preScanned, L, R, dev_newMinRange, dev_newMaxRange,
+		dev_counter, dev_prevCounter, dev_prevChildrenCount, outLMinRange, outRMinRange, printPairs);
+
+	cudaStatus = cudaDeviceSynchronize();
+	if (cudaStatus != cudaSuccess)
+	{
+		fprintf(stderr, "cudaSynchronize failed!");
+		goto Error;
+	}
 
 
 Error:
@@ -323,6 +378,8 @@ Error:
 	cudaFree(dev_counter);
 	cudaFree(dev_prevCounter);
 	cudaFree(dev_childrenCount);
+	cudaFree(dev_prevChildrenCount);
+	cudaFree(dev_tempChildrenCount);
 	cudaFree(dev_minRange);
 	cudaFree(dev_maxRange);
 	cudaFree(dev_newMinRange);

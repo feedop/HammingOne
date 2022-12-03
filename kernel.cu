@@ -14,6 +14,11 @@
 #include <cstdlib>
 #include <vector>
 
+void usage()
+{
+    fprintf(stderr, "USAGE: ./HammingOne [inputFile] [printPairs] [compareToCpu]\ne.g. ./HammingOne input.txt 1 0\n");
+}
+
 // reads integers from a file
 int readFile(unsigned int* input, FILE* file, int& sequenceLength, int& numberOfSequences)
 {
@@ -49,7 +54,7 @@ int readFile(unsigned int* input, FILE* file, int& sequenceLength, int& numberOf
             for (int j = 0; j < sequenceLength; j++)
             {
                 memcpy(temp, bytes + i * (bits + 1) + j * INTSIZE, INTSIZE * sizeof(char));
-                temp[BUFSIZE] = '\0';
+                temp[INTSIZE] = '\0';
                 input[j * numberOfSequences + i] = strtoul(temp, NULL, 2);
             }
         }
@@ -60,12 +65,12 @@ int readFile(unsigned int* input, FILE* file, int& sequenceLength, int& numberOf
         {
             // fill with leading zeros
             memcpy(temp, bytes + i * (bits + 1), remainder * sizeof(char));
-            temp[remainder + 1] = '\0';
+            temp[remainder] = '\0';
             input[i] = strtoul(temp, NULL, 2);
             for (int j = 1; j < sequenceLength; j++)
             {
-                memcpy(temp, bytes + i * (bits + 1) + j * INTSIZE, INTSIZE * sizeof(char));
-                temp[BUFSIZE] = '\0';
+                memcpy(temp, bytes + i * (bits + 1) + (j - 1) * INTSIZE + remainder, INTSIZE * sizeof(char));
+                temp[INTSIZE] = '\0';
                 input[j * numberOfSequences + i] = strtoul(temp, NULL, 2);
             }
         }
@@ -77,7 +82,7 @@ int readFile(unsigned int* input, FILE* file, int& sequenceLength, int& numberOf
 cudaError_t generateRandoms(unsigned int* dev_input, const int sequenceLength, const int numberOfSequences);
 
 // prints a few sequences from the beginning 
-void head(unsigned int* input, float milliseconds, const int sequenceLength, const int numberOfSequences)
+void head(unsigned int* input, const int sequenceLength, const int numberOfSequences)
 {
     int vecLen = sequenceLength > 3 ? 3 : sequenceLength;
     int vectors = numberOfSequences > 10 ? 10 : numberOfSequences;
@@ -99,7 +104,6 @@ void head(unsigned int* input, float milliseconds, const int sequenceLength, con
         }
         std::cout << std::endl;
     }
-    std::cout << "Time elapsed: " << milliseconds / 1000 << " seconds\n";
 }
 
 __global__ void generateRandomsKernel(unsigned int *input, const int sequenceLength, const int numberOfSequences)
@@ -123,10 +127,13 @@ int main(int argc, char* argv[])
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
+
     int sequenceLength = 32;
     int numberOfSequences = 100000;
-    float milliseconds = 0;
-    float totalTime = 0;
+    float GPUmilliseconds = 0;
+    float GPUtotalTime = 0;
+    int printPairs = 0;
+    bool compareToCPU = false;
 
     unsigned int* input = (unsigned int*)malloc(sizeof(int) * sequenceLength * numberOfSequences);
     unsigned int* dev_input = 0;
@@ -137,9 +144,10 @@ int main(int argc, char* argv[])
         goto Error;
     }
 
-    if (argc > 3)
+    if (argc > 4)
     {
-        fprintf(stderr, "too many arguments");
+        fprintf(stderr, "too many arguments ");
+        usage();
         goto Error;
     }
     if (argc >= 2)
@@ -148,7 +156,8 @@ int main(int argc, char* argv[])
         FILE* file = fopen(argv[1], "r");
         if (!file)
         {
-            fprintf(stderr, "no such file");
+            fprintf(stderr, "no such file ");
+            usage();
             fclose(file);
             goto Error;
         }
@@ -159,23 +168,41 @@ int main(int argc, char* argv[])
             goto Error;
         }
     }
-    if (argc == 3)
+    if (argc >= 3)
     {
+        printPairs = atoi(argv[2]);
         // display pairs
+    }
+    if (argc == 4)
+    {
+        compareToCPU = atoi(argv[3]);
     }
 
     if (argc == 1)
     {
+        /*FILE* file = fopen("input.txt", "r");
+        if (!file)
+        {
+            fprintf(stderr, "no such file");
+            goto Error;
+        }
+
+        if (readFile(input, file, sequenceLength, numberOfSequences))
+        {
+            fclose(file);
+            goto Error;
+        }*/
         // generate random sequences
         cudaEventRecord(start);
         cudaStatus = generateRandoms(dev_input, sequenceLength, numberOfSequences);
         if (cudaStatus != cudaSuccess) {
-            fprintf(stderr, "addWithCuda failed!");
+            fprintf(stderr, "generateRandoms failed!");
             return 1;
         }
         cudaEventRecord(stop);
         cudaEventSynchronize(stop);
-        cudaEventElapsedTime(&milliseconds, start, stop);
+        cudaEventElapsedTime(&GPUmilliseconds, start, stop);
+        GPUtotalTime += GPUmilliseconds;
 
         // Copy output vector from GPU buffer to host memory.
         cudaStatus = cudaMemcpy(input, dev_input, sizeof(int) * sequenceLength * numberOfSequences, cudaMemcpyDeviceToHost);
@@ -184,10 +211,16 @@ int main(int argc, char* argv[])
             goto Error;
         }
 
-        //std::cout << "Generating random input completed. Time elapsed: " << milliseconds / 1000 << " seconds\n";
+        //// print
+        //head(input, sequenceLength, numberOfSequences);
 
-        // print
-        head(input, milliseconds, sequenceLength, numberOfSequences);
+        std::cout << "Generating random input completed. Time elapsed: " << GPUmilliseconds / 1000 << " seconds\n";
+        cudaStatus = cudaMemcpy(dev_input, input, sizeof(int) * sequenceLength * numberOfSequences, cudaMemcpyHostToDevice);
+        if (cudaStatus != cudaSuccess)
+        {
+            fprintf(stderr, "cudaMemcpy failed!");
+            goto Error;
+        }
     }
     else
     {
@@ -206,12 +239,13 @@ int main(int argc, char* argv[])
     cudaEventRecord(start);
     cudaStatus = radixSort(&dev_input, sequenceLength, numberOfSequences);
     if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "addWithCuda failed!");
-        return 1;
+        fprintf(stderr, "radixSort failed!");
+        goto Error;
     }
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&milliseconds, start, stop);
+    cudaEventElapsedTime(&GPUmilliseconds, start, stop);
+    GPUtotalTime += GPUmilliseconds;
 
     // Copy output vector from GPU buffer to host memory.
     cudaStatus = cudaMemcpy(input, dev_input, sizeof(int) * sequenceLength * numberOfSequences, cudaMemcpyDeviceToHost);
@@ -223,24 +257,24 @@ int main(int argc, char* argv[])
     cudaDeviceSynchronize();
 
     // print
-    head(input, milliseconds, sequenceLength, numberOfSequences);
+    //head(input, sequenceLength, numberOfSequences);
 
-    //std::cout << "Radix sort completed. Time elapsed: " << milliseconds / 1000 << " seconds\n";
+    std::cout << "Radix sort completed. Time elapsed: " << GPUmilliseconds / 1000 << " seconds\n";
 
     // ---------------------------------------------------------------------------------
 
     // build a binary trie and search for all pairs with Hamming distance equal to 1
-    cudaEventRecord(start);
-    cudaStatus = hammingOne(dev_input, numberOfSequences, sequenceLength);
+    long long matchCount = 0;
+
+    cudaStatus = hammingOne(dev_input, numberOfSequences, sequenceLength, matchCount, start, stop, GPUtotalTime, printPairs);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMemcpy failed!");
         goto Error;
     }
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&milliseconds, start, stop);
 
-    std::cout << "Building the tree completed. Time elapsed: " << milliseconds / 1000 << " seconds\n";
+    if (!printPairs)
+        std::cout << "Finished. Total time: " << GPUtotalTime / 1000 << " seconds\n";
+    std::cout << "Matches found: " << matchCount << std::endl;
 
     // cudaDeviceReset must be called before exiting in order for profiling and
     // tracing tools such as Nsight and Visual Profiler to show complete traces.
@@ -249,6 +283,7 @@ int main(int argc, char* argv[])
         fprintf(stderr, "cudaDeviceReset failed!");
         return 1;
     }
+    
 Error:
     free(input);
     cudaFree(dev_input);
