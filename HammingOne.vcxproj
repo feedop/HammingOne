@@ -89,6 +89,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="binary_trie.cuh" />
+    <ClInclude Include="CPU_binary_trie.hpp" />
     <ClInclude Include="defines.h" />
     <ClInclude Include="radix_sort.cuh" />
     <ClInclude Include="trie_search.cuh" />

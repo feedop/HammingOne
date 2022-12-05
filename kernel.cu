@@ -3,6 +3,7 @@
 #include "device_launch_parameters.h"
 #include "curand_kernel.h"
 #include "defines.h"
+#include "CPU_binary_trie.hpp"
 
 #include "radix_sort.cuh"
 #include "trie_search.cuh"
@@ -13,15 +14,17 @@
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
+#include <chrono>
 
 void usage()
 {
-    fprintf(stderr, "USAGE: ./HammingOne [inputFile] [printPairs] [compareToCpu]\ne.g. ./HammingOne input.txt 1 0\n");
+    fprintf(stderr, "USAGE: ./HammingOne [inputFile] [-c] [-v]\ne.g. ./HammingOne input.txt -c -v\n");
 }
 
 // reads integers from a file
-int readFile(unsigned int* input, FILE* file, int& sequenceLength, int& numberOfSequences)
+int readFile(unsigned int** input, unsigned int** dev_input, FILE* file, int& sequenceLength, int& numberOfSequences)
 {
+    std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     char buf[BUFSIZE + 1];
     char* info;
     info = fgets(buf, BUFSIZE, file);
@@ -41,6 +44,15 @@ int readFile(unsigned int* input, FILE* file, int& sequenceLength, int& numberOf
     sequenceLength = (bits + INTSIZE - 1) / INTSIZE;
     int remainder = bits % INTSIZE;
 
+    // allocate memory for input
+    *input = (unsigned int*)malloc(sizeof(int) * sequenceLength * numberOfSequences);
+
+    cudaError_t cudaStatus = cudaMalloc((void**)dev_input, sizeof(int) * sequenceLength * numberOfSequences);
+    if (cudaStatus != cudaSuccess)
+    {
+        fprintf(stderr, "cudaMalloc failed!");
+        return EXIT_FAILURE;
+    }
     // read file to buffer
     fseek(file, offset, 0);
     char* bytes = (char*)malloc(numberOfSequences * (bits + 1) * sizeof(char));
@@ -55,7 +67,7 @@ int readFile(unsigned int* input, FILE* file, int& sequenceLength, int& numberOf
             {
                 memcpy(temp, bytes + i * (bits + 1) + j * INTSIZE, INTSIZE * sizeof(char));
                 temp[INTSIZE] = '\0';
-                input[j * numberOfSequences + i] = strtoul(temp, NULL, 2);
+                (*input)[j * numberOfSequences + i] = strtoul(temp, NULL, 2);
             }
         }
     }
@@ -66,16 +78,18 @@ int readFile(unsigned int* input, FILE* file, int& sequenceLength, int& numberOf
             // fill with leading zeros
             memcpy(temp, bytes + i * (bits + 1), remainder * sizeof(char));
             temp[remainder] = '\0';
-            input[i] = strtoul(temp, NULL, 2);
+            (*input)[i] = strtoul(temp, NULL, 2);
             for (int j = 1; j < sequenceLength; j++)
             {
                 memcpy(temp, bytes + i * (bits + 1) + (j - 1) * INTSIZE + remainder, INTSIZE * sizeof(char));
                 temp[INTSIZE] = '\0';
-                input[j * numberOfSequences + i] = strtoul(temp, NULL, 2);
+                (*input)[j * numberOfSequences + i] = strtoul(temp, NULL, 2);
             }
         }
     }
     free(bytes);
+    std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+    std::cout << "Reading file complete. Time elapsed: " << std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin).count() / 1000000000.0 << " seconds" << std::endl;
     return EXIT_SUCCESS;
 }
 
@@ -127,24 +141,17 @@ int main(int argc, char* argv[])
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
-
-    int sequenceLength = 32;
-    int numberOfSequences = 100000;
+    int sequenceLength = 0;
+    int numberOfSequences = 0;
     float GPUmilliseconds = 0;
     float GPUtotalTime = 0;
-    int printPairs = 0;
+    bool printPairs = false;
     bool compareToCPU = false;
 
-    unsigned int* input = (unsigned int*)malloc(sizeof(int) * sequenceLength * numberOfSequences);
-    unsigned int* dev_input = 0;
+    unsigned int* input = 0;
+    unsigned int* dev_input = 0;;
 
-    cudaStatus = cudaMalloc((void**)&dev_input, sizeof(int) * sequenceLength * numberOfSequences);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
-
-    if (argc > 4)
+    if (argc > 4 || argc == 1)
     {
         fprintf(stderr, "too many arguments ");
         usage();
@@ -162,82 +169,49 @@ int main(int argc, char* argv[])
             goto Error;
         }
 
-        if (readFile(input, file, sequenceLength, numberOfSequences))
+        if (readFile(&input, &dev_input, file, sequenceLength, numberOfSequences))
         {
             fclose(file);
             goto Error;
         }
     }
     if (argc >= 3)
-    {
-        printPairs = atoi(argv[2]);
-        // display pairs
+    {   
+        if (!strcmp(argv[2], "-c"))
+            compareToCPU = true;
+        else if (!strcmp(argv[2], "-v"))
+            printPairs = true;
+        else
+        {
+            usage();
+            goto Error;
+        }
     }
     if (argc == 4)
     {
-        compareToCPU = atoi(argv[3]);
-    }
-
-    if (argc == 1)
-    {
-        /*FILE* file = fopen("input.txt", "r");
-        if (!file)
+        if (!strcmp(argv[3], "-c"))
+            compareToCPU = true;
+        else if (!strcmp(argv[3], "-v"))
+            printPairs = true;
+        else
         {
-            fprintf(stderr, "no such file");
-            goto Error;
-        }
-
-        if (readFile(input, file, sequenceLength, numberOfSequences))
-        {
-            fclose(file);
-            goto Error;
-        }*/
-        // generate random sequences
-        cudaEventRecord(start);
-        cudaStatus = generateRandoms(dev_input, sequenceLength, numberOfSequences);
-        if (cudaStatus != cudaSuccess) {
-            fprintf(stderr, "generateRandoms failed!");
-            return 1;
-        }
-        cudaEventRecord(stop);
-        cudaEventSynchronize(stop);
-        cudaEventElapsedTime(&GPUmilliseconds, start, stop);
-        GPUtotalTime += GPUmilliseconds;
-
-        // Copy output vector from GPU buffer to host memory.
-        cudaStatus = cudaMemcpy(input, dev_input, sizeof(int) * sequenceLength * numberOfSequences, cudaMemcpyDeviceToHost);
-        if (cudaStatus != cudaSuccess) {
-            fprintf(stderr, "cudaMemcpy failed!");
-            goto Error;
-        }
-
-        //// print
-        //head(input, sequenceLength, numberOfSequences);
-
-        std::cout << "Generating random input completed. Time elapsed: " << GPUmilliseconds / 1000 << " seconds\n";
-        cudaStatus = cudaMemcpy(dev_input, input, sizeof(int) * sequenceLength * numberOfSequences, cudaMemcpyHostToDevice);
-        if (cudaStatus != cudaSuccess)
-        {
-            fprintf(stderr, "cudaMemcpy failed!");
+            usage();
             goto Error;
         }
     }
-    else
-    {
-        // copy ints read from file to device
-        cudaStatus = cudaMemcpy(dev_input, input, sizeof(int) * sequenceLength * numberOfSequences, cudaMemcpyHostToDevice);
-        if (cudaStatus != cudaSuccess) {
-            fprintf(stderr, "cudaMemcpy failed!");
-            goto Error;
-        }
+
+    // copy ints read from file to device
+    cudaStatus = cudaMemcpy(dev_input, input, sizeof(int) * sequenceLength * numberOfSequences, cudaMemcpyHostToDevice);
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMemcpy failed!");
+        goto Error;
     }
-    
 
     // ---------------------------------------------------------------------------------
 
     // radix sort input
     cudaEventRecord(start);
-    cudaStatus = radixSort(&dev_input, sequenceLength, numberOfSequences);
+    cudaStatus = GPU::radixSort(&dev_input, sequenceLength, numberOfSequences);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "radixSort failed!");
         goto Error;
@@ -256,9 +230,6 @@ int main(int argc, char* argv[])
 
     cudaDeviceSynchronize();
 
-    // print
-    //head(input, sequenceLength, numberOfSequences);
-
     std::cout << "Radix sort completed. Time elapsed: " << GPUmilliseconds / 1000 << " seconds\n";
 
     // ---------------------------------------------------------------------------------
@@ -266,14 +237,13 @@ int main(int argc, char* argv[])
     // build a binary trie and search for all pairs with Hamming distance equal to 1
     long long matchCount = 0;
 
-    cudaStatus = hammingOne(dev_input, numberOfSequences, sequenceLength, matchCount, start, stop, GPUtotalTime, printPairs);
+    cudaStatus = GPU::hammingOne(dev_input, numberOfSequences, sequenceLength, matchCount, start, stop, GPUtotalTime, printPairs);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMemcpy failed!");
         goto Error;
     }
 
-    if (!printPairs)
-        std::cout << "Finished. Total time: " << GPUtotalTime / 1000 << " seconds\n";
+    std::cout << " ======== GPU Results: ========\n" << "Finished. Total GPU time: " << GPUtotalTime / 1000 << " seconds\n";
     std::cout << "Matches found: " << matchCount << std::endl;
 
     // cudaDeviceReset must be called before exiting in order for profiling and
@@ -282,6 +252,25 @@ int main(int argc, char* argv[])
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaDeviceReset failed!");
         return 1;
+    }
+
+    // CPU algorithm
+    if (compareToCPU)
+    {
+        std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+        std::cout << " ======== CPU Results: ========\n";
+        if (printPairs)
+        {
+            CPU::Trie<true> trie(input, sequenceLength, numberOfSequences);
+            trie.hammingOne();
+        }
+        else
+        {
+            CPU::Trie<false> trie(input, sequenceLength, numberOfSequences);
+            trie.hammingOne();
+        }
+        std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+        std::cout << "Finished. Total CPU time: " << std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin).count() / 1000000000.0 << " seconds" << std::endl;
     }
     
 Error:
