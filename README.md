@@ -2,22 +2,18 @@
 
 Autor: Filip Skrzeczkowski
 
-Program w ci¹gu binarnych wektorów dowolnej d³ugoœci, znajduje pary takich, których dystans Hamminga wynosi 1 (ró¿ni¹ siê na dok³adnie jednej pozycji).
+In a vector (size *n*) of binary sequences of arbitrary (but constant) length (*l*), the program finds all pairs with Hamming distance equal to 1 (two sequences differing at exactly one index). Time complexity *nl^2* (compared to naive *n^2l*) is achieved through the use of radix trees built on CUDA.
 
-## Jak zbudowaæ?
+Matchings are treated as ordered pairs so their number may be twice as much compared to what you may be expecting if you consider pairs unordered.
 
-Do plików Ÿród³owych do³¹czony zosta³ Makefile przeznaczony do u¿ytkowania na systemach Unixowych. Po wykonaniu polecenia make w tym folderze (src),
-program binarny powinien pokazaæ siê w folderze bin.
+## How to build?
 
-W przypadku systemu Windows sugerowanym rozwi¹zaniem jest otworzenie do³¹czonego projektu Visual Studio (Ÿród³owa edycja 2022) i zbudowanie projektu za jego pomoc¹. 
-Mo¿na spóbowaæ równie¿ wykorzystaæ narzêdzia implementuj¹ce polecenie make na Windowsie (np. pobrane z choco), choæ nie mo¿na zagwarantowaæ stuprocentowej skutecznoœci
-tego rozwi¹zania na ka¿dym komputerze.
+The easiest way to build the project is to use the VS2022 .sln file.
 
-## Jak korzystaæ?
+## How to use?
 
-Program nale¿y wywo³aæ nastêpum¹co: ./HammingOne [input] [-c] [-v]
+./HammingOne [-c] [-v] [input] 
 
-Pierwszy argument jest obowi¹zkowy i oznacza plik Ÿród³owy. "-c" i "-v" s¹ opcjonalne i mog¹ zostaæ zamienione kolejnoœci¹.
- * "-c" - odpowiada za wykonanie algorytmu na CPU (oprócz GPU) i wyœwietlenie czasu dzia³ania obu werji
- * "-v" (verbose) - sprawia, ¿e program wyœwietla nie tylko liczbê znalezionych par, ale te¿ wszystkie wektory wchodz¹ce w ich sk³ad.
- Program wyœwietli wszystkie pary, dlatego zalecane jest wykorzystywanie tej opcji tylko w przypadku ma³ych danych.
+"input" is mandatory. It is the name of the input file containing the binary sequences. "-c" and "-v" sÄ… optional.
+ * "-c" - launches a CPU version of the algorithm besides the CUDA one. Warning: very slow.
+ * "-v" (verbose) - not only displays the number of pairs but also each pair individually. Better use only for small input.
