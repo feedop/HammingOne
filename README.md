@@ -2,7 +2,7 @@
 
 Autor: Filip Skrzeczkowski
 
-In a vector (size *n*) of binary sequences of arbitrary (but constant) length (*l*), the program finds all pairs with Hamming distance equal to 1 (two sequences differing at exactly one index). Time complexity *nl^2* (compared to naive *n^2l*) is achieved through the use of radix trees built on CUDA.
+In a vector (size *n*) of binary sequences of arbitrary (but constant) length (*l*), the program finds all pairs with Hamming distance equal to 1 (two sequences differing at exactly one index). Time complexity *nl<sup>2</sup>* (compared to naïve *n<sup>2</sup>l*) is achieved through the use of radix trees built on CUDA.
 
 Matchings are treated as ordered pairs so their number may be twice as much compared to what you may be expecting if you consider pairs unordered.
 
