@@ -14,6 +14,6 @@ The easiest way to build the project is to use the VS2022 .sln file.
 
 ./HammingOne [-c] [-v] [input] 
 
-"input" is mandatory. It is the name of the input file containing the binary sequences. "-c" and "-v" są optional.
+"input" is mandatory. It is the name of the input file containing the binary sequences. "-c" and "-v" are optional.
  * "-c" - launches a CPU version of the algorithm besides the CUDA one. Warning: very slow.
  * "-v" (verbose) - not only displays the number of pairs but also each pair individually. Better use only for small input.

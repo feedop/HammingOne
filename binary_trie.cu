@@ -255,7 +255,7 @@ namespace GPU
 			R[*prevCounter + id] = NOCHILD;
 	}
 
-	// build the tree
+	// build the tree top-down
 	void buildTrie(const unsigned int* input, int* L, int* R, int* outLMinRange, int* outRMinRange, const int numberOfSequences, const int sequenceLength, bool printPairs)
 	{
 		cudaError_t cudaStatus;
@@ -296,14 +296,14 @@ namespace GPU
 			for (int j = from; j >= to; j--)
 			{
 
-				// mark children
+				// determine how many children each node on the current level has and mark them
 				markChildrenKernel << <(numberOfSequences + threadsPerBlock - 1) / threadsPerBlock, threadsPerBlock >> > (input, dev_children,
 					dev_minRange, dev_maxRange, numberOfSequences, dev_counter, i, j, dev_childrenCount);
 				//preScan
 				thrust::exclusive_scan(dev_children_ptr, dev_children_ptr + 2 * (numberOfSequences), dev_preScanned_ptr);;
-				// number of children
+				// determine the total number of children
 				childrenUpdateKernel << <1, 1 >> > (dev_childrenCount, dev_prevChildrenCount, dev_children, dev_preScanned);
-				// fill indices		
+				// fill indices
 				fillIndicesKernel << < (numberOfSequences + threadsPerBlock - 1) / threadsPerBlock, threadsPerBlock >> > (dev_children, dev_preScanned, L, R, dev_counter, dev_prevCounter, dev_prevChildrenCount);
 				// calculate ranges
 				calculateRangesKernel << < (numberOfSequences + threadsPerBlock - 1) / threadsPerBlock, threadsPerBlock >> > (input, dev_children, dev_preScanned, dev_minRange, dev_maxRange,

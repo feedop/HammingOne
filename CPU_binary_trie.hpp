@@ -2,6 +2,7 @@
 #include <list>
 #include <chrono>
 #include <iostream>
+#include <memory>
 
 namespace CPU
 {
@@ -18,22 +19,24 @@ namespace CPU
 
 		struct Node
 		{
-			Node* left = nullptr;
-			Node* right = nullptr;
+			std::shared_ptr<Node> left = nullptr;
+			std::shared_ptr<Node> right = nullptr;
 			int rangeCount = 0;
 			std::list<int> range;
-		} *head;
+		};
+
+		std::shared_ptr<Node> head;
 
 	public:
 		Trie(const unsigned int* input, const int sequenceLength, const int numberOfSequences);
 		void hammingOne();
 	};
 
-	// insrert element into the trie
+	// insert element into the trie
 	template <bool printPairs>
 	inline void Trie<printPairs>::insert(const int index)
 	{
-		Node* ptr = head;
+		std::shared_ptr<Node> ptr = head;
 		for (int i = 0; i < sequenceLength; i++)
 		{
 			for (int j = INTSIZE - 1; j >= (i == sequenceLength - 1 ? 1 : 0); j--)
@@ -42,14 +45,14 @@ namespace CPU
 				if ((input[i * numberOfSequences + index]) & (1 << j))
 				{
 					if (ptr->right == nullptr)
-						ptr->right = new Node();
+						ptr->right = std::make_shared<Node>();
 
 					ptr = ptr->right;
 				}
 				else // left
 				{
 					if (ptr->left == nullptr)
-						ptr->left = new Node();
+						ptr->left = std::make_shared<Node>();
 
 					ptr = ptr->left;
 				}
@@ -59,7 +62,7 @@ namespace CPU
 		if ((input[(sequenceLength - 1) * numberOfSequences + index]) & 1)
 		{
 			if (ptr->right == nullptr)
-				ptr->right = new Node();
+				ptr->right = std::make_shared<Node>();
 
 			if (printPairs) ptr->right->range.push_back(index);
 			else ptr->right->rangeCount++;
@@ -67,7 +70,7 @@ namespace CPU
 		else // left
 		{
 			if (ptr->left == nullptr)
-				ptr->left = new Node();
+				ptr->left = std::make_shared<Node>();
 
 			if (printPairs) ptr->left->range.push_back(index);
 			else ptr->left->rangeCount++;
@@ -78,7 +81,7 @@ namespace CPU
 	inline void Trie<printPairs>::search(const int index, const int integer, const int bit, long long& matches)
 	{
 		// look for a our sequence with one bit changed in the trie
-		Node* ptr = head;
+		std::shared_ptr<Node> ptr = head;
 		// unchanged bits on the left
 		for (int i = 0; i < integer; i++)
 		{
@@ -198,7 +201,7 @@ namespace CPU
 		input(input), sequenceLength(sequenceLength), numberOfSequences(numberOfSequences)
 	{
 		std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
-		head = new Node();
+		head = std::make_shared<Node>();
 		for (int index = 0; index < numberOfSequences; index++)
 		{
 			insert(index);

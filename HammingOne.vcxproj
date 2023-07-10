@@ -83,7 +83,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <CudaCompile Include="binary_trie.cu" />
-    <CudaCompile Include="kernel.cu" />
+    <CudaCompile Include="main.cu" />
     <CudaCompile Include="radix_sort.cu" />
     <CudaCompile Include="trie_search.cu" />
   </ItemGroup>
